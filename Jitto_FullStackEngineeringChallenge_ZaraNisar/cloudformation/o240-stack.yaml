@@ -1,0 +1,210 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: O240 Music Festival Lineup - S3->SQS->Lambda->DynamoDB->SNS (Python 3.12)
+
+Parameters:
+  UploadBucketName:
+    Type: String
+    Description: Name of the S3 bucket where you will upload JSON/CSV files
+  DeploymentBucketName:
+    Type: String
+    Description: S3 bucket that contains the Lambda deployment ZIP
+  LambdaZipKey:
+    Type: String
+    Description: S3 key (path/filename.zip) for the Lambda deployment ZIP
+  EmailAddress:
+    Type: String
+    Description: Email address to subscribe to SNS notifications
+  DynamoBillingMode:
+    Type: String
+    Default: PAY_PER_REQUEST
+    AllowedValues: [PAY_PER_REQUEST, PROVISIONED]
+    Description: Billing mode for DynamoDB table
+
+Resources:
+  IngestDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  IngestQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt IngestDLQ.Arn
+        maxReceiveCount: 5
+
+  IngestQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues:
+        - !Ref IngestQueue
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowS3ToSend
+            Effect: Allow
+            Principal: "*"
+            Action: "sqs:SendMessage"
+            Resource: !GetAtt IngestQueue.Arn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !Sub "arn:aws:s3:::${UploadBucketName}"
+
+  # Important: configure S3 notifications only AFTER the queue policy exists
+  UploadBucket:
+    Type: AWS::S3::Bucket
+    DependsOn: IngestQueuePolicy
+    Properties:
+      BucketName: !Ref UploadBucketName
+      NotificationConfiguration:
+        QueueConfigurations:
+          - Event: "s3:ObjectCreated:*"
+            Queue: !GetAtt IngestQueue.Arn
+
+  FestivalTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "FestivalPerformances-${AWS::StackName}"
+      BillingMode: !Ref DynamoBillingMode
+      AttributeDefinitions:
+        - AttributeName: Performer
+          AttributeType: S
+        - AttributeName: Performance
+          AttributeType: S
+        - AttributeName: Date
+          AttributeType: S
+        - AttributeName: StartSort
+          AttributeType: S
+        - AttributeName: Stage
+          AttributeType: S
+        - AttributeName: DateStart
+          AttributeType: S
+        - AttributeName: PopularityBucket
+          AttributeType: S
+        - AttributeName: Popularity
+          AttributeType: N
+      KeySchema:
+        - AttributeName: Performer
+          KeyType: HASH
+        - AttributeName: Performance
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: DateIndex
+          KeySchema:
+            - AttributeName: Date
+              KeyType: HASH
+            - AttributeName: StartSort
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: StageIndex
+          KeySchema:
+            - AttributeName: Stage
+              KeyType: HASH
+            - AttributeName: DateStart
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: PopularityIndex
+          KeySchema:
+            - AttributeName: PopularityBucket
+              KeyType: HASH
+            - AttributeName: Popularity
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  FestivalTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "festival-processing-alerts-${AWS::StackName}"
+
+  FestivalSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref FestivalTopic
+      Protocol: email
+      Endpoint: !Ref EmailAddress
+
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      # no RoleName to avoid name collisions on re-deploys
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: o240-inline-permissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${UploadBucketName}/*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:BatchWriteItem
+                  - dynamodb:PutItem
+                  - dynamodb:DescribeTable
+                Resource:
+                  - !GetAtt FestivalTable.Arn
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource:
+                  - !Ref FestivalTopic
+              - Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource:
+                  - !GetAtt IngestQueue.Arn
+
+  FestivalLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "processFestivalData-${AWS::StackName}"
+      Runtime: python3.12
+      Handler: handler.lambda_handler
+      Role: !GetAtt LambdaRole.Arn
+      Code:
+        S3Bucket: !Ref DeploymentBucketName
+        S3Key: !Ref LambdaZipKey
+      Timeout: 120
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref FestivalTable
+          SNS_TOPIC_ARN: !Ref FestivalTopic
+
+  LambdaSQSEvent:
+    Type: AWS::Lambda::EventSourceMapping
+    Properties:
+      BatchSize: 5
+      EventSourceArn: !GetAtt IngestQueue.Arn
+      FunctionName: !Ref FestivalLambda
+      Enabled: true
+
+Outputs:
+  UploadBucketNameOut:
+    Value: !Ref UploadBucketName
+    Description: S3 bucket to upload JSON/CSV
+  QueueUrlOut:
+    Value: !Ref IngestQueue
+    Description: SQS queue URL
+  TableNameOut:
+    Value: !Ref FestivalTable
+    Description: DynamoDB table name
+  SnsTopicArnOut:
+    Value: !Ref FestivalTopic
+    Description: SNS topic ARN

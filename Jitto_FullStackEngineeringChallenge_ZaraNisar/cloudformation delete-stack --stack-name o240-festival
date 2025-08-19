@@ -1,0 +1,35 @@
+{
+    "Parameters": [
+        {
+            "ParameterKey": "DeploymentBucketName",
+            "NoEcho": false,
+            "Description": "S3 bucket that contains the Lambda deployment ZIP"
+        },
+        {
+            "ParameterKey": "LambdaZipKey",
+            "NoEcho": false,
+            "Description": "S3 key (path/filename.zip) for the Lambda deployment ZIP"
+        },
+        {
+            "ParameterKey": "DynamoBillingMode",
+            "DefaultValue": "PAY_PER_REQUEST",
+            "NoEcho": false,
+            "Description": "Billing mode for DynamoDB table"
+        },
+        {
+            "ParameterKey": "EmailAddress",
+            "NoEcho": false,
+            "Description": "Email address to subscribe to SNS notifications"
+        },
+        {
+            "ParameterKey": "UploadBucketName",
+            "NoEcho": false,
+            "Description": "Name of the S3 bucket where you will upload JSON/CSV files"
+        }
+    ],
+    "Description": "O240 Music Festival Lineup - S3->SQS->Lambda->DynamoDB->SNS (Python 3.12)",
+    "Capabilities": [
+        "CAPABILITY_IAM"
+    ],
+    "CapabilitiesReason": "The following resource(s) require capabilities: [AWS::IAM::Role]"
+}

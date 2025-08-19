@@ -1,0 +1,26 @@
+[
+  {
+    "Performer": "Megan Thee Stallion",
+    "Stage": "Main Stage",
+    "Start": "8:00pm",
+    "End": "10:00pm",
+    "Date": "2025-07-12",
+    "Popularity": 95
+  },
+  {
+    "Performer": "Olivia Rodrigo",
+    "Stage": "Side Stage",
+    "Start": "7:00pm",
+    "End": "9:00pm",
+    "Date": "2025-07-12",
+    "Popularity": 92
+  },
+  {
+    "Performer": "Rene Rapp",
+    "Stage": "Outdoor Stage",
+    "Start": "4:30pm",
+    "End": "5:30pm",
+    "Date": "2025-07-13",
+    "Popularity": 78
+  }
+]
